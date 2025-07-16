@@ -73,6 +73,12 @@ const char* const kGVCFAltAllele = "<*>";
 const char* const kSupportingUncalledAllele = "UNCALLED_ALLELE";
 const char* const kDPFormatField = "DP";
 const char* const kADFormatField = "AD";
+const char* const kNVAFFormatField = "NVAF";
+const char* const kNVADFormatField = "NVAD";
+const char* const kNVDPFormatField = "NVDP";
+const char* const kPRefFormatField = "P_REF";
+const char* const kPGermlineFormatField = "P_GERMLINE";
+const char* const kPSomaticFormatField = "P_SOMATIC";
 const char* const kVAFFormatField = "VAF";
 const char* const kMFFormatField = "MF";
 const char* const kMDFormatField = "MD";
@@ -742,6 +748,72 @@ void AddReadDepths(const AlleleCount& allele_count, const AlleleMap& allele_map,
   }
 }
 
+// Adds the VAF for non-target (normal) samples to the first VariantCall of
+// Variant. NVAF: the allele fraction of the variants in non-target samples.
+// These are calculated from the provided allele_count information. The
+// allele_map is needed to map between the Variant reference and
+// alternate_bases and the Alleles used in allele_count.
+void AddNonTargetAlleleFrequencies(
+    const absl::node_hash_map<std::string, AlleleCount>&
+        allele_counts_per_sample,
+    const std::string& target_sample, const AlleleMap& allele_map,
+    Variant* variant) {
+  std::vector<AlleleCount> non_target_allele_counts;
+  for (const auto& entry : allele_counts_per_sample) {
+    if (entry.first != target_sample) {
+      non_target_allele_counts.push_back(entry.second);
+    }
+  }
+
+  if (non_target_allele_counts.empty()) {
+    return;
+  }
+
+  if (variant->alternate_bases_size() == 1 &&
+      (variant->alternate_bases(0) == kNoAltAllele ||
+       variant->alternate_bases(0) == kGVCFAltAllele)) {
+    // Variant has no meaningful ALT alleles.
+    return;
+  }
+
+  const int dp_non_target = TotalAlleleCounts(non_target_allele_counts);
+  if (dp_non_target == 0) {
+    return;
+  }
+
+  std::vector<double> nvaf;
+  std::vector<int> nvad;
+  const std::vector<Allele> non_target_alleles =
+      SumAlleleCounts(non_target_allele_counts);
+
+  absl::btree_map<absl::string_view, const Allele*> alt_to_alleles;
+  for (const auto& [allele, alt_bases] : allele_map) {
+    alt_to_alleles[alt_bases] = &allele;
+  }
+
+  CHECK(alt_to_alleles.size() == allele_map.size())
+      << "Non-unique alternative alleles!";
+
+  for (const std::string& alt : variant->alternate_bases()) {
+    const Allele& target_alt_allele = *alt_to_alleles.find(alt)->second;
+
+    int non_target_alt_count = 0;
+    for (const auto& nt_allele : non_target_alleles) {
+      if (IsAllelesTheSame(target_alt_allele, nt_allele)) {
+        non_target_alt_count = nt_allele.count();
+        break;
+      }
+    }
+    nvaf.push_back(1.0 * non_target_alt_count / dp_non_target);
+    nvad.push_back(non_target_alt_count);
+  }
+
+  VariantCall* call_ptr = variant->mutable_calls(0);
+  nucleus::SetInfoField(kNVAFFormatField, nvaf, call_ptr);
+  nucleus::SetInfoField(kNVADFormatField, nvad, call_ptr);
+  nucleus::SetInfoField(kNVDPFormatField, dp_non_target, call_ptr);
+}
+
 // Returns true if the current site should be emitted, even if it's a reference
 // site. This function is used to return reference site samples if the
 // member variable fraction_reference_sites_to_emit >= 0.0 by pulling draws
@@ -1010,12 +1082,14 @@ std::optional<DeepVariantCall> VariantCaller::CallVariant(
             StringPtrLessThan());
 
   AddReadDepths(target_sample_allele_count, allele_map, variant);
+  AddNonTargetAlleleFrequencies(allele_counts_per_sample, target_sample_,
+                                allele_map, variant);
   if (output_options.complex_variant_created) {
     AddSupportingReads(output_options.allele_counts_mod, allele_map,
-                      target_sample_, &call);
+                       target_sample_, &call);
   } else {
     AddSupportingReads(allele_counts_per_sample, allele_map,
-                      target_sample_, &call);
+                       target_sample_, &call);
   }
   if (options_.small_model_vaf_context_window_size() > 0) {
     AddAdjacentAlleleFractionsAtPosition(
@@ -1397,6 +1471,21 @@ void VariantCaller::ComputeMethylationStats(
     nucleus::SetInfoField(kMFFormatField, mf_values, variant->mutable_calls(0));
     nucleus::SetInfoField(kMDFormatField, md_values, variant->mutable_calls(0));
   }
+}
+
+// Static helper to set prediction probabilities into FORMAT fields.
+void VariantCaller::AddPredictionProbabilities(
+    const std::vector<double>& predictions, Variant* variant) {
+  if (predictions.empty() || variant == nullptr) return;
+
+  // Ensure we have at least three probabilities; pad with zeros if needed.
+  std::vector<double> probs = predictions;
+  if (probs.size() < 3) probs.resize(3, 0.0);
+
+  VariantCall* call_ptr = variant->mutable_calls(0);
+  nucleus::SetInfoField(kPRefFormatField, probs[0], call_ptr);
+  nucleus::SetInfoField(kPGermlineFormatField, probs[1], call_ptr);
+  nucleus::SetInfoField(kPSomaticFormatField, probs[2], call_ptr);
 }
 
 }  // namespace multi_sample

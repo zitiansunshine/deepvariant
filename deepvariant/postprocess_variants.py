@@ -248,7 +248,14 @@ _PON_FILTERING = flags.DEFINE_string(
 # alleles.
 # Each tuple contains: field name, ref_is_zero.
 _ALT_ALLELE_INDEXED_FORMAT_FIELDS = frozenset(
-    [('AD', True), ('VAF', False), ('MF', True), ('MD', True)]
+    [
+        ('AD', True),
+        ('VAF', False),
+        ('NVAF', False),
+        ('NVAD', False),
+        ('MF', True),
+        ('MD', True),
+    ]
 )
 
 # The number of places past the decimal point to round QUAL estimates to.
@@ -551,6 +558,16 @@ def add_call_to_variant(
   gls = [genomics_math.perror_to_bounded_log10_perror(gp) for gp in predictions]
   variantcall_utils.set_gl(call, gls)
   uncall_gt_if_no_ad(variant)
+  # Store prediction probabilities for downstream use.
+  try:
+    from third_party.nucleus.util import struct_utils as _struct_utils  # pylint: disable=g-import-not-at-top
+    # Ensure predictions has at least 3 elements.
+    _probs = list(predictions) + [0.0] * (3 - len(predictions))
+    _struct_utils.add_number_field(call.info, 'P_REF', _probs[0])
+    _struct_utils.add_number_field(call.info, 'P_GERMLINE', _probs[1])
+    _struct_utils.add_number_field(call.info, 'P_SOMATIC', _probs[2])
+  except Exception:  # pylint: disable=broad-except
+    pass
   variant.filter[:] = compute_filter_fields(variant, qual_filter)
   uncall_homref_gt_if_lowqual(variant, _CNN_HOMREF_CALL_MIN_GQ.value)
   return variant

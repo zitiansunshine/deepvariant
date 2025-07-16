@@ -493,3 +493,47 @@ def copy_checkpoint(
         output_fname,
         overwrite=True,
     )
+
+
+def set_trainable_layers(
+    model: tf.keras.Model,
+    trainable_layer_names: Optional[Sequence[str]] = None,
+) -> tf.keras.Model:
+  """Sets specified layers as trainable and freezes all other layers.
+
+  Args:
+    model: A `tf.keras.Model` whose layers' `trainable` attributes will be
+      updated.
+    trainable_layer_names: A sequence of layer names that should remain
+      trainable. If `None` or empty, all layers will be left trainable
+      (default behaviour).
+
+  Returns:
+    The same model instance with updated `trainable` flags.
+  """
+  # If the caller did not pass any layer names, keep the default behaviour
+  # (all layers trainable).
+  if not trainable_layer_names:
+    logging.info("No layers specified for freezing; all layers remain trainable.")
+    for layer in model.layers:
+      layer.trainable = True
+    return model
+
+  # Convert to a set for efficient lookup and strip whitespace.
+  trainable_set = {name.strip() for name in trainable_layer_names if name.strip()}
+  unknown_layers = trainable_set.difference({layer.name for layer in model.layers})
+  if unknown_layers:
+    raise ValueError(
+        f"The following specified layer names were not found in the model: {unknown_layers}"
+    )
+
+  for layer in model.layers:
+    layer.trainable = layer.name in trainable_set
+
+  logging.info(
+      "Set %d/%d layers as trainable (%s).",
+      sum(layer.trainable for layer in model.layers),
+      len(model.layers),
+      ", ".join(sorted(trainable_set)),
+  )
+  return model

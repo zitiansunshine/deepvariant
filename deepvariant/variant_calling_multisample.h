@@ -85,9 +85,15 @@ extern const char* const kSupportingUncalledAllele;
 // format fields.
 extern const char* const kDPFormatField;
 extern const char* const kADFormatField;
+extern const char* const kNVAFFormatField;
 extern const char* const kVAFFormatField;
 extern const char* const kMFFormatField;
 extern const char* const kMDFormatField;
+extern const char* const kNVADFormatField;
+extern const char* const kNVDPFormatField;
+extern const char* const kPRefFormatField;
+extern const char* const kPGermlineFormatField;
+extern const char* const kPSomaticFormatField;
 
 // Implements the less functionality needed to use an Allele as a key in a map.
 struct OrderAllele {
@@ -274,6 +280,11 @@ class VariantCaller {
           target_sample_allele_count_iterator,
       DeepVariantCall* call) const;
 
+  // Writes prediction probabilities (length >= 3) to FORMAT fields P_REF,
+  // P_GERMLINE, and P_SOMATIC of the first call in `variant`.
+  static void AddPredictionProbabilities(const std::vector<double>& predictions,
+                                         Variant* variant);
+
   // Helper function to combine the methylated reference sites and keep only the
   // positive strands.
   // For 5mC methylation, Pacbio marks only forward positions,
@@ -388,7 +399,7 @@ class VariantCaller {
   std::vector<std::tuple<std::string, int32_t, bool>>
   ExtractAndClearGSiteMethylation(AlleleCount& g_site) const;
 
-  // Transfers methylation to the corresponding read’s C allele at the
+  // Transfers methylation to the corresponding read's C allele at the
   // previous site.
   void TransferMethylationToPrevC(
       AlleleCount& prev_allele_count,
